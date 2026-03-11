@@ -11,12 +11,55 @@ export function VideoPanel({ stream }: VideoPanelProps) {
 		const video = ref.current
 		if (!video) return
 
-		video.srcObject = stream
+		video.srcObject = null
 
-		if (stream) {
-			video.play().catch(error => {
-				console.error('Video play failed:', error)
+		if (!stream) {
+			return
+		}
+
+		console.log('[FlowCam Desktop] attaching stream')
+		console.log(
+			'[FlowCam Desktop] video tracks:',
+			stream.getVideoTracks().length
+		)
+		console.log(
+			'[FlowCam Desktop] audio tracks:',
+			stream.getAudioTracks().length
+		)
+
+		video.srcObject = stream
+		video.muted = true
+		video.autoplay = true
+		video.playsInline = true
+
+		const tryPlay = async () => {
+			try {
+				await video.play()
+				console.log('[FlowCam Desktop] video.play() success')
+			} catch (error) {
+				console.error('[FlowCam Desktop] video.play() failed:', error)
+			}
+		}
+
+		video.onloadedmetadata = () => {
+			console.log('[FlowCam Desktop] loadedmetadata', {
+				width: video.videoWidth,
+				height: video.videoHeight
 			})
+			void tryPlay()
+		}
+
+		video.oncanplay = () => {
+			console.log('[FlowCam Desktop] canplay')
+			void tryPlay()
+		}
+
+		void tryPlay()
+
+		return () => {
+			video.onloadedmetadata = null
+			video.oncanplay = null
+			video.srcObject = null
 		}
 	}, [stream])
 
@@ -34,7 +77,7 @@ export function VideoPanel({ stream }: VideoPanelProps) {
 				<div className='video-empty'>
 					<div className='video-empty-title'>Waiting for phone stream</div>
 					<div className='video-empty-subtitle'>
-						Open FlowCam on Android, scan the QR code and start streaming.
+						Open FlowCam on Android and start streaming.
 					</div>
 				</div>
 			)}

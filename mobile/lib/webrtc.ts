@@ -3,8 +3,7 @@ import {
 	mediaDevices,
 	RTCIceCandidate,
 	RTCPeerConnection,
-	RTCSessionDescription,
-	type MediaStream
+	RTCSessionDescription
 } from 'react-native-webrtc'
 import { buildSocketUrl, type PairingPayload } from './pairing'
 import { safeParseSignalMessage } from './protocol'
@@ -22,13 +21,11 @@ type FacingMode = 'user' | 'environment'
 type StartPhonePublisherOptions = {
 	pairing: PairingPayload
 	facingMode: FacingMode
-	onLocalStream?: (stream: MediaStream) => void
 	onState?: (state: PublisherState) => void
 	onError?: (message: string) => void
 }
 
 export type PhonePublisherSession = {
-	localStream: MediaStream
 	stop: () => void
 }
 
@@ -47,6 +44,13 @@ type PeerConnectionWithEvents = RTCPeerConnection & {
 	addEventListener: (type: string, listener: (event: any) => void) => void
 }
 
+type MediaDeviceLike = {
+	deviceId: string
+	kind: string
+	label?: string
+	facing?: string
+}
+
 async function ensureAndroidCameraPermission() {
 	if (Platform.OS !== 'android') return
 
@@ -61,39 +65,141 @@ async function ensureAndroidCameraPermission() {
 	)
 
 	if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-		throw new Error('Camera permission denied on Android.')
+		throw new Error(`Camera permission denied on Android: ${granted}`)
+	}
+}
+
+function scoreVideoDevice(
+	device: MediaDeviceLike,
+	facingMode: FacingMode
+): number {
+	const label = (device.label ?? '').toLowerCase()
+	const facing = (device.facing ?? '').toLowerCase()
+
+	let score = 0
+
+	if (device.kind !== 'videoinput') return -1
+
+	if (facingMode === 'environment') {
+		if (
+			label.includes('back') ||
+			label.includes('rear') ||
+			label.includes('environment') ||
+			facing.includes('environment') ||
+			facing.includes('back')
+		) {
+			score += 100
+		}
+
+		if (
+			label.includes('front') ||
+			label.includes('user') ||
+			facing.includes('user') ||
+			facing.includes('front')
+		) {
+			score -= 50
+		}
+	} else {
+		if (
+			label.includes('front') ||
+			label.includes('user') ||
+			facing.includes('user') ||
+			facing.includes('front')
+		) {
+			score += 100
+		}
+
+		if (
+			label.includes('back') ||
+			label.includes('rear') ||
+			label.includes('environment') ||
+			facing.includes('environment') ||
+			facing.includes('back')
+		) {
+			score -= 50
+		}
+	}
+
+	return score
+}
+
+async function pickVideoDeviceId(
+	facingMode: FacingMode
+): Promise<string | undefined> {
+	try {
+		const rawDevices =
+			(await mediaDevices.enumerateDevices()) as MediaDeviceLike[]
+
+		const videoDevices = rawDevices.filter(
+			device => device.kind === 'videoinput'
+		)
+
+		console.log('[FlowCam] enumerateDevices count:', rawDevices.length)
+		console.log(
+			'[FlowCam] video devices:',
+			videoDevices.map(device => ({
+				deviceId: device.deviceId,
+				label: device.label,
+				facing: device.facing
+			}))
+		)
+
+		if (videoDevices.length === 0) {
+			return undefined
+		}
+
+		const ranked = [...videoDevices]
+			.map(device => ({
+				device,
+				score: scoreVideoDevice(device, facingMode)
+			}))
+			.sort((a, b) => b.score - a.score)
+
+		const selected = ranked[0]?.device
+
+		console.log('[FlowCam] selected video device:', selected)
+
+		return selected?.deviceId
+	} catch (error) {
+		console.log('[FlowCam] enumerateDevices failed:', error)
+		return undefined
 	}
 }
 
 export async function startPhonePublisher(
 	options: StartPhonePublisherOptions
 ): Promise<PhonePublisherSession> {
-	const { pairing, onLocalStream, onState, onError } = options
+	const { pairing, facingMode, onState, onError } = options
 
 	onState?.('connecting')
-
 	await ensureAndroidCameraPermission()
 
-	let localStream: MediaStream
+	const selectedDeviceId = await pickVideoDeviceId(facingMode)
 
-	try {
-		localStream = await mediaDevices.getUserMedia({
-			audio: false,
-			video: true
-		})
+	const localStream = await mediaDevices.getUserMedia({
+		audio: false,
+		video: selectedDeviceId
+			? {
+					deviceId: selectedDeviceId,
+					frameRate: 30,
+					width: 1280,
+					height: 720
+				}
+			: {
+					frameRate: 30,
+					facingMode,
+					width: 1280,
+					height: 720
+				}
+	})
 
-		console.log('[FlowCam] getUserMedia success')
-		console.log('[FlowCam] video tracks:', localStream.getVideoTracks().length)
-
-		onLocalStream?.(localStream)
-	} catch (error) {
-		console.error('[FlowCam] getUserMedia failed:', error)
-		onState?.('error')
-		onError?.(
-			`getUserMedia failed: ${error instanceof Error ? error.message : String(error)}`
-		)
-		throw error
-	}
+	console.log('[FlowCam] getUserMedia success')
+	console.log('[FlowCam] video tracks:', localStream.getVideoTracks().length)
+	console.log('[FlowCam] using facingMode:', facingMode)
+	console.log(
+		'[FlowCam] using deviceId:',
+		selectedDeviceId ?? 'fallback-facingMode'
+	)
 
 	const peer = new RTCPeerConnection({
 		iceServers: [],
@@ -170,44 +276,41 @@ export async function startPhonePublisher(
 		}
 	})
 
-	socket.onopen = () => {
-		;(async () => {
-			try {
-				if (stopped) return
+	socket.onopen = async () => {
+		try {
+			if (stopped) return
 
-				console.log('[FlowCam] signaling socket open')
+			console.log('[FlowCam] signaling socket open')
 
-				socket.send(
-					JSON.stringify({
-						type: 'hello',
-						role: 'phone',
-						sessionId: pairing.sessionId
-					})
-				)
+			socket.send(
+				JSON.stringify({
+					type: 'hello',
+					role: 'phone',
+					sessionId: pairing.sessionId
+				})
+			)
 
-				onState?.('socket-open')
+			onState?.('socket-open')
 
-				const offer = await peer.createOffer()
-				await peer.setLocalDescription(offer)
+			const offer = await peer.createOffer()
+			await peer.setLocalDescription(offer)
 
-				socket.send(
-					JSON.stringify({
-						type: 'offer',
-						sessionId: pairing.sessionId,
-						sdp: {
-							type: offer.type,
-							sdp: offer.sdp ?? ''
-						}
-					})
-				)
+			socket.send(
+				JSON.stringify({
+					type: 'offer',
+					sessionId: pairing.sessionId,
+					sdp: {
+						type: offer.type,
+						sdp: offer.sdp ?? ''
+					}
+				})
+			)
 
-				onState?.('negotiating')
-			} catch (error) {
-				console.error('[FlowCam] socket/onopen failed:', error)
-				onState?.('error')
-				onError?.(error instanceof Error ? error.message : String(error))
-			}
-		})()
+			onState?.('negotiating')
+		} catch (error) {
+			onState?.('error')
+			onError?.(error instanceof Error ? error.message : String(error))
+		}
 	}
 
 	socket.onmessage = event => {
@@ -239,13 +342,7 @@ export async function startPhonePublisher(
 						return
 					}
 
-					case 'peer-left': {
-						if (message.role === 'desktop') {
-							onState?.('disconnected')
-						}
-						return
-					}
-
+					case 'peer-left':
 					case 'reset': {
 						onState?.('disconnected')
 						return
@@ -255,17 +352,16 @@ export async function startPhonePublisher(
 						return
 				}
 			} catch (error) {
-				console.error('[FlowCam] socket/onmessage failed:', error)
 				onState?.('error')
 				onError?.(error instanceof Error ? error.message : String(error))
 			}
 		})()
 	}
 
-	socket.onerror = error => {
-		console.error('[FlowCam] websocket error:', error)
-		onState?.('error')
-		onError?.('WebSocket signaling failed.')
+	socket.onerror = () => {
+		if (!stopped) {
+			onError?.('WebSocket signaling failed.')
+		}
 	}
 
 	socket.onclose = () => {
@@ -275,7 +371,6 @@ export async function startPhonePublisher(
 	}
 
 	return {
-		localStream,
 		stop
 	}
 }

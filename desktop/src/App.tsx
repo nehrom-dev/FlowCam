@@ -35,6 +35,7 @@ export default function App() {
 		pcRef.current?.close()
 		pcRef.current = null
 		wsRef.current?.close()
+		wsRef.current = null
 
 		const next = await invoke<PairingInfo>('reset_session')
 		setPairing(next)
@@ -52,8 +53,12 @@ export default function App() {
 				rtcpMuxPolicy: 'require'
 			})
 
+			console.log('[FlowCam Desktop] created RTCPeerConnection')
+
 			pc.onicecandidate = event => {
 				if (!event.candidate) return
+
+				console.log('[FlowCam Desktop] local ICE candidate generated')
 
 				socket.send(
 					JSON.stringify({
@@ -64,7 +69,16 @@ export default function App() {
 				)
 			}
 
+			pc.oniceconnectionstatechange = () => {
+				console.log(
+					'[FlowCam Desktop] iceConnectionState:',
+					pc.iceConnectionState
+				)
+			}
+
 			pc.onconnectionstatechange = () => {
+				console.log('[FlowCam Desktop] connectionState:', pc.connectionState)
+
 				const state = pc.connectionState
 
 				if (state === 'connected') {
@@ -81,8 +95,31 @@ export default function App() {
 			}
 
 			pc.ontrack = event => {
+				console.log('[FlowCam Desktop] ontrack fired')
+				console.log('[FlowCam Desktop] track kind:', event.track.kind)
+				console.log('[FlowCam Desktop] track muted:', event.track.muted)
+				console.log('[FlowCam Desktop] streams count:', event.streams.length)
+
+				event.track.onunmute = () => {
+					console.log('[FlowCam Desktop] track onunmute')
+				}
+
+				event.track.onmute = () => {
+					console.log('[FlowCam Desktop] track onmute')
+				}
+
+				event.track.onended = () => {
+					console.log('[FlowCam Desktop] track onended')
+				}
+
 				if (event.streams && event.streams[0]) {
-					setRemoteStream(event.streams[0])
+					const stream = event.streams[0]
+					console.log('[FlowCam Desktop] using event.streams[0]')
+					console.log(
+						'[FlowCam Desktop] stream video tracks:',
+						stream.getVideoTracks().length
+					)
+					setRemoteStream(stream)
 					setStatus('streaming')
 					return
 				}
@@ -92,6 +129,13 @@ export default function App() {
 				}
 
 				inboundStreamRef.current.addTrack(event.track)
+
+				console.log('[FlowCam Desktop] using fallback MediaStream')
+				console.log(
+					'[FlowCam Desktop] fallback video tracks:',
+					inboundStreamRef.current.getVideoTracks().length
+				)
+
 				setRemoteStream(inboundStreamRef.current)
 				setStatus('streaming')
 			}
@@ -106,6 +150,7 @@ export default function App() {
 		async (message: SignalMessage, socket: WebSocket, sessionId: string) => {
 			switch (message.type) {
 				case 'peer-joined': {
+					console.log('[FlowCam Desktop] peer joined:', message.role)
 					if (message.role === 'phone') {
 						setStatus('negotiating')
 					}
@@ -113,6 +158,7 @@ export default function App() {
 				}
 
 				case 'peer-left': {
+					console.log('[FlowCam Desktop] peer left:', message.role)
 					if (message.role === 'phone') {
 						setRemoteStream(null)
 						inboundStreamRef.current = null
@@ -124,6 +170,8 @@ export default function App() {
 				}
 
 				case 'offer': {
+					console.log('[FlowCam Desktop] received offer')
+
 					const pc = ensurePeerConnection(sessionId, socket)
 
 					await pc.setRemoteDescription(
@@ -133,8 +181,12 @@ export default function App() {
 						})
 					)
 
+					console.log('[FlowCam Desktop] setRemoteDescription OK')
+
 					const answer = await pc.createAnswer()
 					await pc.setLocalDescription(answer)
+
+					console.log('[FlowCam Desktop] created and set local answer')
 
 					socket.send(
 						JSON.stringify({
@@ -155,11 +207,14 @@ export default function App() {
 					const pc = pcRef.current
 					if (!pc) return
 
+					console.log('[FlowCam Desktop] received remote ICE candidate')
+
 					await pc.addIceCandidate(new RTCIceCandidate(message.candidate))
 					return
 				}
 
 				case 'reset': {
+					console.log('[FlowCam Desktop] received reset')
 					pcRef.current?.close()
 					pcRef.current = null
 					inboundStreamRef.current = null
@@ -168,8 +223,6 @@ export default function App() {
 					return
 				}
 
-				case 'answer':
-				case 'hello':
 				default:
 					return
 			}
@@ -204,6 +257,8 @@ export default function App() {
 		wsRef.current = socket
 
 		socket.onopen = () => {
+			console.log('[FlowCam Desktop] local signaling connected')
+
 			socket.send(
 				JSON.stringify({
 					type: 'hello',
@@ -211,6 +266,7 @@ export default function App() {
 					sessionId: pairing.sessionId
 				})
 			)
+
 			setStatus('waiting-phone')
 		}
 
@@ -303,6 +359,15 @@ export default function App() {
 							<span>Phone endpoint</span>
 							<span className='mono'>
 								{pairing ? `ws://${pairing.localIp}:${pairing.port}` : '—'}
+							</span>
+						</div>
+
+						<div className='diag-row'>
+							<span>Remote stream</span>
+							<span className='mono'>
+								{remoteStream
+									? `${remoteStream.getVideoTracks().length} video / ${remoteStream.getAudioTracks().length} audio`
+									: 'none'}
 							</span>
 						</div>
 

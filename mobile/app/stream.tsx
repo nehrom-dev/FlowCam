@@ -2,15 +2,12 @@ import { useCameraPermissions } from 'expo-camera'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
-import { RTCView, type MediaStream } from 'react-native-webrtc'
 import { parsePairingPayload, type PairingPayload } from '../lib/pairing'
 import {
 	startPhonePublisher,
 	type PhonePublisherSession,
 	type PublisherState
 } from '../lib/webrtc'
-
-type CameraFacing = 'front' | 'back'
 
 function buildPairingFromParams(
 	host?: string,
@@ -40,10 +37,8 @@ export default function StreamScreen() {
 	)
 
 	const [permission, requestPermission] = useCameraPermissions()
-	const [localStream, setLocalStream] = useState<MediaStream | null>(null)
 	const [status, setStatus] = useState<PublisherState>('connecting')
 	const [error, setError] = useState('')
-	const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back')
 	const [restartKey, setRestartKey] = useState(0)
 
 	const sessionRef = useRef<PhonePublisherSession | null>(null)
@@ -61,18 +56,11 @@ export default function StreamScreen() {
 		;(async () => {
 			try {
 				setError('')
-				setLocalStream(null)
 				setStatus('connecting')
 
 				const nextSession = await startPhonePublisher({
 					pairing,
-					facingMode: cameraFacing === 'front' ? 'user' : 'environment',
-					onLocalStream: stream => {
-						if (!cancelled) {
-							console.log('[FlowCam] local stream received')
-							setLocalStream(stream)
-						}
-					},
+					facingMode: 'environment',
 					onState: nextState => {
 						if (!cancelled) {
 							console.log('[FlowCam] state ->', nextState)
@@ -106,18 +94,13 @@ export default function StreamScreen() {
 			cancelled = true
 			sessionRef.current?.stop()
 			sessionRef.current = null
-			setLocalStream(null)
 		}
-	}, [permission?.granted, pairing, cameraFacing, restartKey])
+	}, [permission?.granted, pairing, restartKey])
 
 	function handleReconnect() {
 		sessionRef.current?.stop()
 		sessionRef.current = null
 		setRestartKey(value => value + 1)
-	}
-
-	function handleFlipCamera() {
-		setCameraFacing(current => (current === 'back' ? 'front' : 'back'))
 	}
 
 	function handleStop() {
@@ -149,49 +132,16 @@ export default function StreamScreen() {
 				>
 					<Text style={styles.primaryButtonText}>Grant permission</Text>
 				</Pressable>
-
-				<Pressable
-					style={styles.secondaryButton}
-					onPress={() => router.replace('/')}
-				>
-					<Text style={styles.secondaryButtonText}>Back</Text>
-				</Pressable>
 			</View>
 		)
 	}
 
 	return (
 		<View style={styles.screen}>
-			<View style={styles.previewWrap}>
-				{localStream ? (
-					<RTCView
-						streamURL={localStream.toURL()}
-						style={StyleSheet.absoluteFill}
-						objectFit='cover'
-						mirror={cameraFacing === 'front'}
-					/>
-				) : (
-					<View style={styles.previewFallback}>
-						<Text style={styles.previewTitle}>Starting camera…</Text>
-						<Text style={styles.previewSubtitle}>Current state: {status}</Text>
-						{error ? <Text style={styles.errorText}>{error}</Text> : null}
-					</View>
-				)}
-			</View>
-
-			<View style={styles.topOverlay}>
-				<Text style={styles.brand}>FlowCam</Text>
-				<View style={styles.statusPill}>
-					<Text style={styles.statusText}>{status}</Text>
-				</View>
-			</View>
-
-			<View style={styles.bottomSheet}>
-				<Text style={styles.sheetTitle}>Streaming to desktop</Text>
-				<Text style={styles.metaText}>
-					{pairing ? `${pairing.host}:${pairing.port}` : 'No pairing endpoint'}
-				</Text>
-
+			<View style={styles.centered}>
+				<Text style={styles.infoTitle}>FlowCam</Text>
+				<Text style={styles.infoText}>Status: {status}</Text>
+				<Text style={styles.infoText}>Camera: main</Text>
 				{error ? <Text style={styles.errorText}>{error}</Text> : null}
 
 				<View style={styles.actions}>
@@ -200,13 +150,6 @@ export default function StreamScreen() {
 						onPress={handleReconnect}
 					>
 						<Text style={styles.primaryButtonText}>Reconnect</Text>
-					</Pressable>
-
-					<Pressable
-						style={styles.secondaryButton}
-						onPress={handleFlipCamera}
-					>
-						<Text style={styles.secondaryButtonText}>Flip camera</Text>
 					</Pressable>
 
 					<Pressable
@@ -222,87 +165,27 @@ export default function StreamScreen() {
 }
 
 const styles = StyleSheet.create({
-	screen: {
+	screen: { flex: 1, backgroundColor: '#0e1117' },
+	centered: {
 		flex: 1,
-		backgroundColor: '#000'
-	},
-	previewWrap: {
-		...StyleSheet.absoluteFillObject,
-		backgroundColor: '#05070c'
-	},
-	previewFallback: {
-		flex: 1,
-		alignItems: 'center',
 		justifyContent: 'center',
+		alignItems: 'center',
 		padding: 24
 	},
-	previewTitle: {
+	infoTitle: {
 		color: '#fff',
-		fontSize: 26,
+		fontSize: 28,
 		fontWeight: '800',
-		marginBottom: 8
+		marginBottom: 10
 	},
-	previewSubtitle: {
+	infoText: {
 		color: '#c7d0df',
-		fontSize: 15,
-		lineHeight: 22,
+		fontSize: 16,
 		textAlign: 'center',
-		maxWidth: 320
+		marginBottom: 12
 	},
-	topOverlay: {
-		position: 'absolute',
-		top: 22,
-		left: 18,
-		right: 18,
-		flexDirection: 'row',
-		alignItems: 'center',
-		justifyContent: 'space-between'
-	},
-	brand: {
-		color: '#fff',
-		fontSize: 22,
-		fontWeight: '900'
-	},
-	statusPill: {
-		height: 34,
-		paddingHorizontal: 14,
-		borderRadius: 999,
-		alignItems: 'center',
-		justifyContent: 'center',
-		backgroundColor: 'rgba(17,24,39,0.78)',
-		borderWidth: 1,
-		borderColor: 'rgba(255,255,255,0.12)'
-	},
-	statusText: {
-		color: '#edf2ff',
-		textTransform: 'capitalize',
-		fontWeight: '700'
-	},
-	bottomSheet: {
-		position: 'absolute',
-		left: 16,
-		right: 16,
-		bottom: 16,
-		borderRadius: 24,
-		padding: 18,
-		backgroundColor: 'rgba(11,15,22,0.82)',
-		borderWidth: 1,
-		borderColor: 'rgba(255,255,255,0.08)'
-	},
-	sheetTitle: {
-		color: '#fff',
-		fontSize: 20,
-		fontWeight: '800'
-	},
-	metaText: {
-		color: '#b4bfd2',
-		marginTop: 8,
-		fontSize: 14
-	},
-	actions: {
-		gap: 10,
-		marginTop: 16
-	},
+	errorText: { color: '#fecaca', textAlign: 'center', marginBottom: 12 },
+	actions: { gap: 10, width: '100%', maxWidth: 320, marginTop: 12 },
 	primaryButton: {
 		height: 48,
 		borderRadius: 999,
@@ -310,11 +193,7 @@ const styles = StyleSheet.create({
 		justifyContent: 'center',
 		backgroundColor: '#6d7cff'
 	},
-	primaryButtonText: {
-		color: '#fff',
-		fontWeight: '800',
-		fontSize: 15
-	},
+	primaryButtonText: { color: '#fff', fontWeight: '800', fontSize: 15 },
 	secondaryButton: {
 		height: 48,
 		borderRadius: 999,
@@ -324,35 +203,5 @@ const styles = StyleSheet.create({
 		borderWidth: 1,
 		borderColor: 'rgba(255,255,255,0.08)'
 	},
-	secondaryButtonText: {
-		color: '#fff',
-		fontWeight: '700',
-		fontSize: 15
-	},
-	centered: {
-		flex: 1,
-		backgroundColor: '#0e1117',
-		justifyContent: 'center',
-		alignItems: 'center',
-		padding: 24
-	},
-	infoTitle: {
-		color: '#fff',
-		fontSize: 26,
-		fontWeight: '800',
-		textAlign: 'center',
-		marginBottom: 10
-	},
-	infoText: {
-		color: '#c7d0df',
-		fontSize: 15,
-		lineHeight: 22,
-		textAlign: 'center',
-		marginBottom: 18
-	},
-	errorText: {
-		color: '#fecaca',
-		marginTop: 10,
-		textAlign: 'center'
-	}
+	secondaryButtonText: { color: '#fff', fontWeight: '700', fontSize: 15 }
 })
