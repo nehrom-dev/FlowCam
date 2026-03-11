@@ -1,0 +1,11 @@
+"$schema" = "schemas/schema.json"
+
+[[permission]]
+identifier = "allow-get-pairing-info"
+description = "Enables the get_pairing_info command."
+commands.allow = ["get_pairing_info"]
+
+[[permission]]
+identifier = "deny-get-pairing-info"
+description = "Denies the get_pairing_info command."
+commands.deny = ["get_pairing_info"]
