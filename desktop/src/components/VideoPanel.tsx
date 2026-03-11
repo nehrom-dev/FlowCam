@@ -8,8 +8,16 @@ export function VideoPanel({ stream }: VideoPanelProps) {
 	const ref = useRef<HTMLVideoElement | null>(null)
 
 	useEffect(() => {
-		if (!ref.current) return
-		ref.current.srcObject = stream
+		const video = ref.current
+		if (!video) return
+
+		video.srcObject = stream
+
+		if (stream) {
+			video.play().catch(error => {
+				console.error('Video play failed:', error)
+			})
+		}
 	}, [stream])
 
 	return (
@@ -19,7 +27,7 @@ export function VideoPanel({ stream }: VideoPanelProps) {
 					ref={ref}
 					autoPlay
 					playsInline
-					muted={false}
+					muted
 					className='video'
 				/>
 			) : (

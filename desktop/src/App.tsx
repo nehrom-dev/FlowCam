@@ -24,11 +24,13 @@ export default function App() {
 
 	const wsRef = useRef<WebSocket | null>(null)
 	const pcRef = useRef<RTCPeerConnection | null>(null)
+	const inboundStreamRef = useRef<MediaStream | null>(null)
 
 	const loadPairing = useCallback(async () => {
 		setLastError('')
 		setRemoteStream(null)
 		setStatus('idle')
+		inboundStreamRef.current = null
 
 		pcRef.current?.close()
 		pcRef.current = null
@@ -79,12 +81,19 @@ export default function App() {
 			}
 
 			pc.ontrack = event => {
-				const [stream] = event.streams
-
-				if (stream) {
-					setRemoteStream(stream)
+				if (event.streams && event.streams[0]) {
+					setRemoteStream(event.streams[0])
 					setStatus('streaming')
+					return
 				}
+
+				if (!inboundStreamRef.current) {
+					inboundStreamRef.current = new MediaStream()
+				}
+
+				inboundStreamRef.current.addTrack(event.track)
+				setRemoteStream(inboundStreamRef.current)
+				setStatus('streaming')
 			}
 
 			pcRef.current = pc
@@ -106,6 +115,7 @@ export default function App() {
 				case 'peer-left': {
 					if (message.role === 'phone') {
 						setRemoteStream(null)
+						inboundStreamRef.current = null
 						setStatus('waiting-phone')
 						pcRef.current?.close()
 						pcRef.current = null
@@ -116,7 +126,12 @@ export default function App() {
 				case 'offer': {
 					const pc = ensurePeerConnection(sessionId, socket)
 
-					await pc.setRemoteDescription(new RTCSessionDescription(message.sdp))
+					await pc.setRemoteDescription(
+						new RTCSessionDescription({
+							type: message.sdp.type,
+							sdp: message.sdp.sdp
+						})
+					)
 
 					const answer = await pc.createAnswer()
 					await pc.setLocalDescription(answer)
@@ -125,7 +140,10 @@ export default function App() {
 						JSON.stringify({
 							type: 'answer',
 							sessionId,
-							sdp: answer
+							sdp: {
+								type: answer.type,
+								sdp: answer.sdp ?? ''
+							}
 						})
 					)
 
@@ -144,6 +162,7 @@ export default function App() {
 				case 'reset': {
 					pcRef.current?.close()
 					pcRef.current = null
+					inboundStreamRef.current = null
 					setRemoteStream(null)
 					setStatus('waiting-phone')
 					return
@@ -174,6 +193,7 @@ export default function App() {
 			wsRef.current?.close()
 			pcRef.current?.close()
 			pcRef.current = null
+			inboundStreamRef.current = null
 		}
 	}, [])
 
