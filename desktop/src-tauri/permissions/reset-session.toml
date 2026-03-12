@@ -1,0 +1,11 @@
+"$schema" = "schemas/schema.json"
+
+[[permission]]
+identifier = "allow-reset-session"
+description = "Enables the reset_session command."
+commands.allow = ["reset_session"]
+
+[[permission]]
+identifier = "deny-reset-session"
+description = "Denies the reset_session command."
+commands.deny = ["reset_session"]
